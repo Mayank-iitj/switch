@@ -75,6 +75,37 @@ async def test_a_check_that_raises_counts_as_failed():
 
 
 @pytest.mark.asyncio
+async def test_checks_run_concurrently_and_keep_declared_order():
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow() -> CheckOutcome:
+        started.set()
+        await release.wait()
+        return CheckOutcome(name="slow", healthy=True, detail="")
+
+    async def fast() -> CheckOutcome:
+        await started.wait()
+        return CheckOutcome(name="fast", healthy=True, detail="")
+
+    monitor = HealthMonitor(
+        [
+            HealthCheck(name="slow", gates_readiness=True, probe=slow),
+            HealthCheck(name="fast", gates_readiness=True, probe=fast),
+        ],
+        interval_seconds=1.0,
+    )
+    task = asyncio.create_task(monitor.refresh())
+    await asyncio.sleep(0)
+    assert task.done() is False
+
+    release.set()
+    report = await task
+
+    assert [check.name for check in report.checks] == ["slow", "fast"]
+
+
+@pytest.mark.asyncio
 async def test_healthy_checks_carry_no_detail():
     monitor = HealthMonitor([_check("database", True, True)], interval_seconds=1.0)
     await monitor.refresh()

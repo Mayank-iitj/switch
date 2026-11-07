@@ -241,22 +241,20 @@ class HealthMonitor:
         self._latest: ReadinessReport | None = None
 
     async def refresh(self) -> ReadinessReport:
-        outcomes = []
-        for check in self._checks:
+        async def run_check(check: HealthCheck) -> CheckOutcome:
             try:
-                outcomes.append(await check.probe())
+                return await check.probe()
             except Exception as error:
                 # A check that raises is a failed check: reporting healthy
                 # because we could not find out inverts the whole point.
                 logger.exception("Health check %s raised", check.name)
-                outcomes.append(
-                    CheckOutcome(
-                        name=check.name,
-                        healthy=False,
-                        detail=f"The check itself failed: {type(error).__name__}: {error}",
-                    )
+                return CheckOutcome(
+                    name=check.name,
+                    healthy=False,
+                    detail=f"The check itself failed: {type(error).__name__}: {error}",
                 )
 
+        outcomes = await asyncio.gather(*(run_check(check) for check in self._checks))
         gating = {check.name for check in self._checks if check.gates_readiness}
         ready = all(outcome.healthy for outcome in outcomes if outcome.name in gating)
         report = ReadinessReport(
